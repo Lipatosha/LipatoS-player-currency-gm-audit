@@ -1,0 +1,72 @@
+.currency-manager .pcga-send-gm {
+  margin-top: 6px;
+  width: 100%;
+}
+
+.pcga-chat-log {
+  line-height: 1.45;
+}
+
+.pcga-player-confirm {
+  line-height: 1.5;
+}
+
+.pcga-player-destination {
+  margin-bottom: 2px;
+}
+
+.pcga-player-destination strong {
+  font-weight: 700;
+}
+
+.pcga-player-amount {
+  margin-bottom: 5px;
+}
+
+.pcga-player-success {
+  font-weight: 700;
+}
+
+
+.pcga-item-audit {
+  line-height: 1.5;
+}
+
+.pcga-item-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0;
+}
+
+.pcga-item-line img {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,.25);
+  border-radius: 3px;
+}
+
+
+.currency-manager .pcga-send-player,
+.currency-manager .pcga-send-gm {
+  width: 100%;
+  margin-top: 6px;
+}
+.pcga-recipient-dialog {
+  min-width: 300px;
+}
+.pcga-recipient-dialog select {
+  width: 100%;
+}
+
+
+.currency-manager .pcga-choose-player {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.pcga-trade-section{margin-top:6px}
+.pcga-trade-section .pcga-item-line{margin-top:3px}
+
+.pcga-trade-money{margin-top:4px}
