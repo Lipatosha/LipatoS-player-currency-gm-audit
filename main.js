@@ -353,7 +353,7 @@ async function pcgaOpenPlayerTransferDialog(app) {
     content: `
       <div class="standard-form pcga-recipient-dialog">
         <div class="form-group">
-          <label>Получатель</label>
+          <label>Кому передать</label>
           <div class="form-fields">
             <select name="recipient">${options}</select>
           </div>
@@ -364,44 +364,25 @@ async function pcgaOpenPlayerTransferDialog(app) {
         action: "confirm",
         label: "Подтвердить",
         default: true,
-        callback: (event, button) => Number(button.form?.elements?.recipient?.value ?? -1)
+        callback: async (event, button) => {
+          const value = Number(button.form?.elements?.recipient?.value);
+          return Number.isInteger(value) ? value : null;
+        }
       },
       {
         action: "cancel",
         label: "Отмена",
-        callback: () => null
+        callback: async () => null
       }
     ],
     close: () => null
   });
 
-  if (selectedIndex == null) return;
+  if (selectedIndex == null || !recipients[selectedIndex]) return;
+  const target = recipients[selectedIndex];
+  const requestId = foundry.utils.randomID();
 
-  const selected = recipients[selectedIndex];
-  if (!selected) {
-    ui.notifications.warn("Получатель больше недоступен.");
-    return;
-  }
-
-  await pcgaRemoteCurrencyTransfer(origin, selected, amounts);
-
-  if (selected.id === "__GM__") {
-    await playerConfirmation([], amounts, {toGM: true});
-    sendAuditToGM(origin, [], amounts, {toGM: true});
-  } else {
-    const targetActor = game.actors.get(selected.id);
-    await playerConfirmation(targetActor ? [targetActor] : [], amounts);
-    sendAuditToGM(origin, targetActor ? [targetActor] : [], amounts);
-  }
-
-  ui.notifications.info("Деньги переданы.");
-  app.close();
-}
-
-function pcgaRemoteCurrencyTransfer(origin, recipient, amounts) {
-  return new Promise(resolve => {
-    const requestId = foundry.utils.randomID();
-
+  const response = await new Promise(resolve => {
     const handler = payload => {
       if (payload?.type !== "remote-currency-result" || payload?.requestId !== requestId) return;
       game.socket.off(SOCKET, handler);
@@ -413,7 +394,7 @@ function pcgaRemoteCurrencyTransfer(origin, recipient, amounts) {
       type: "remote-currency-request",
       requestId,
       originActorUuid: origin.uuid,
-      targetActorId: recipient.id,
+      targetActorId: target.id,
       amounts
     });
 
@@ -422,59 +403,140 @@ function pcgaRemoteCurrencyTransfer(origin, recipient, amounts) {
       resolve({ok: false, error: "ГМ не ответил на запрос передачи."});
     }, 8000);
   });
-}
 
-function pcgaFindButton(root, text) {
-  return Array.from(root.querySelectorAll("button")).find(button =>
-    String(button.textContent ?? "").trim().toLowerCase() === text.toLowerCase()
-  ) ?? null;
-}
+  if (!response?.ok) {
+    ui.notifications.warn(response?.error ?? "Не удалось передать деньги.");
+    return;
+  }
 
+  if (target.id === "__GM__") {
+    sendAuditToGM(origin, [], amounts, {toGM: true});
+    await playerConfirmation([], amounts, {toGM: true});
+  } else {
+    const targetActor = game.actors.get(target.id);
+    sendAuditToGM(origin, targetActor ? [targetActor] : [], amounts);
+    await playerConfirmation(targetActor ? [targetActor] : [], amounts);
+  }
+
+  ui.notifications.info("Деньги переданы.");
+  app.close();
+}
 function injectSendToGM(app) {
   if (game.user.isGM) return;
   const root = app.element;
-  if (!(root instanceof HTMLElement)) return;
-  if (root.querySelector(".pcga-send-gm, .pcga-choose-player")) return;
+  if (!root?.classList?.contains("currency-manager")) return;
 
-  const transferButton = pcgaFindButton(root, "Передать");
-  if (!transferButton?.parentElement) return;
+  const transferButton = root.querySelector('button[name="transfer"]');
+  if (!transferButton) return;
 
-  const choosePlayer = document.createElement("button");
-  choosePlayer.type = "button";
-  choosePlayer.className = "pcga-choose-player";
-  choosePlayer.innerHTML = '<i class="fa-solid fa-users"></i> Выбор игрока';
-  choosePlayer.addEventListener("click", event => {
-    event.preventDefault();
-    event.stopPropagation();
-    pcgaOpenPlayerTransferDialog(app);
-  });
+  // Убираем штатные цели передачи с основной панели.
+  // Теперь ЛЮБОЙ получатель выбирается только через наше окно "Выбор игрока".
+  // Это касается и "Группа", и строк персонажей (например TEST2) на листе Группы.
+  const nativeTargetInputs = root.querySelectorAll(
+    'input[type="checkbox"][name], input[type="radio"][name]'
+  );
 
-  const sendGM = document.createElement("button");
-  sendGM.type = "button";
-  sendGM.className = "pcga-send-gm";
-  sendGM.innerHTML = '<i class="fa-solid fa-user-shield"></i> Передать ГМу';
-  sendGM.addEventListener("click", event => {
-    event.preventDefault();
-    event.stopPropagation();
-    sendToGM(app);
-  });
+  for (const input of nativeTargetInputs) {
+    const name = String(input.name ?? "").toLowerCase();
+    const value = String(input.value ?? "").toLowerCase();
 
-  transferButton.insertAdjacentElement("afterend", choosePlayer);
-  choosePlayer.insertAdjacentElement("afterend", sendGM);
+    // Не трогаем системные элементы окна, если они не похожи на получателя.
+    const row = input.closest("label, .form-group, .checkbox, .transfer-target");
+    if (!row) continue;
+
+    const text = String(row.textContent ?? "").trim();
+
+    const looksLikeRecipient =
+      name.includes("group") ||
+      name.includes("party") ||
+      name.includes("recipient") ||
+      name.includes("target") ||
+      value === "group" ||
+      text === "Группа" ||
+      // В Group Currency Manager штатный получатель отображается как имя Character Actor.
+      game.actors.some(a => a.type === "character" && a.name === text);
+
+    if (looksLikeRecipient) row.style.display = "none";
+  }
+
+  // Дополнительный проход по label — D&D5e 6 может рендерить цель без предсказуемого name.
+  const characterNames = new Set(
+    game.actors.filter(a => a.type === "character").map(a => a.name)
+  );
+
+  for (const el of root.querySelectorAll("label")) {
+    const text = String(el.textContent ?? "").trim();
+    if (text === "Группа" || characterNames.has(text)) {
+      el.style.display = "none";
+    }
+  }
+
+  // v25: exact D&D5e 6.x Currency Manager markup.
+  // Template: section[data-tab="transfer"] > section.currency > label,
+  // each label contains i.currency.<denomination>.
+  // Required order in TRANSFER panel: CP → GP → SP.
+  const transferCurrencySection =
+    root.querySelector('section[data-tab="transfer"] > section.currency');
+
+  if (transferCurrencySection) {
+    const labels = [...transferCurrencySection.querySelectorAll(':scope > label')];
+    const byKey = key => labels.find(label =>
+      label.querySelector(`:scope > i.currency.${key}`)
+    );
+
+    const cp = byKey("cp");
+    const gp = byKey("gp");
+    const sp = byKey("sp");
+
+    if (cp && gp && sp) {
+      // Keep "ВСЁ" and "ПОЛОВИНА" buttons untouched; only move currency labels.
+      transferCurrencySection.append(cp, gp, sp);
+    }
+  }
+
+  // Hide D&D5e's native "Передать выбранное".
+  transferButton.style.display = "none";
+
+  // Remove old buttons from previous versions if they exist.
+  root.querySelector(".pcga-send-gm")?.remove();
+  root.querySelector(".pcga-send-player")?.remove();
+
+  if (!root.querySelector(".pcga-choose-player")) {
+    const chooseButton = document.createElement("button");
+    chooseButton.type = "button";
+    chooseButton.className = "pcga-choose-player";
+    chooseButton.textContent = "Выбор игрока";
+
+    chooseButton.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      pcgaOpenPlayerTransferDialog(app);
+    });
+
+    transferButton.insertAdjacentElement("afterend", chooseButton);
+  }
 }
 
+/* ============================================================
+ * v8: Item movement / deletion audit
+ * - handles both new-item transfers and stacking into an existing item
+ * - player gets a local confirmation
+ * - GM gets a private audit through module socket
+ * ============================================================ */
+
 const RECENT_ITEM_DESTINATIONS = [];
+const ITEM_PAIR_WINDOW_MS = 3000;
 const PENDING_ITEM_DELETIONS = new Map();
-const ITEM_DESTINATION_TTL = 2200;
 const ITEM_PILES_TRADE_HOOK = "item-piles-tradeComplete";
 
 function itemQuantity(item) {
-  return Math.max(1, Number(item?.system?.quantity ?? 1) || 1);
+  const q = Number(item?.system?.quantity ?? 1);
+  return Number.isFinite(q) ? q : 1;
 }
 
 function itemIdentity(item) {
   return [
-    item?.type ?? "",
+    String(item?.type ?? ""),
     String(item?.name ?? "").trim().toLowerCase(),
     String(item?.system?.identifier ?? "").trim().toLowerCase()
   ].join("|");
@@ -483,7 +545,7 @@ function itemIdentity(item) {
 function pruneItemDestinations() {
   const now = Date.now();
   for (let i = RECENT_ITEM_DESTINATIONS.length - 1; i >= 0; i--) {
-    if (now - RECENT_ITEM_DESTINATIONS[i].time > ITEM_DESTINATION_TTL) {
+    if (now - RECENT_ITEM_DESTINATIONS[i].time > ITEM_PAIR_WINDOW_MS) {
       RECENT_ITEM_DESTINATIONS.splice(i, 1);
     }
   }
@@ -494,13 +556,7 @@ function rememberItemDestination(item, quantity, userId) {
   if (userId && userId !== game.user.id) return;
   if (item?.parent?.documentName !== "Actor") return;
 
-  const key = `${item.parent.uuid}|${item.id}`;
-  const pending = PENDING_ITEM_DELETIONS.get(key);
-  if (pending) {
-    clearTimeout(pending.timer);
-    PENDING_ITEM_DELETIONS.delete(key);
-  }
-
+  quantity = Math.max(1, Number(quantity) || 1);
   pruneItemDestinations();
 
   RECENT_ITEM_DESTINATIONS.push({
@@ -942,7 +998,6 @@ Hooks.once("ready", () => {
       };
       const gave=await normalize(mine.items??[]);
       const got=await normalize(other.items??[]);
-
       const normalizeCurrencies=(entries=[])=>{
         const out={gp:0,sp:0,cp:0};
         for(const e of entries){
