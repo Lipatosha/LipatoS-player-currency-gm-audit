@@ -1,0 +1,50 @@
+name: Build and publish LipatoS Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - module.json
+      - main.js
+      - style.css
+      - README.md
+      - CHANGELOG.md
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+concurrency:
+  group: audit-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check code and manifest
+        run: |
+          node --check main.js
+          node -e 'const m=require("./module.json");if(m.id!=="lipatos-player-currency-gm-audit"||!m.version)process.exit(1);'
+          node tests/coin-audit.cjs
+      - name: Build installation ZIP
+        run: |
+          zip -q lipatos-player-currency-gm-audit.zip module.json main.js style.css README.md CHANGELOG.md
+          unzip -t lipatos-player-currency-gm-audit.zip
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p 'require("./module.json").version')
+          TAG="v$VERSION"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" lipatos-player-currency-gm-audit.zip module.json --clobber
+          else
+            gh release create "$TAG" lipatos-player-currency-gm-audit.zip module.json \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "LipatoS — Аудит валюты и предметов $TAG" \
+              --notes "Техническое удаление монет при переносе в кошелёк не отображается как удаление предмета."
+          fi
