@@ -70,3 +70,75 @@
 .pcga-trade-section .pcga-item-line{margin-top:3px}
 
 .pcga-trade-money{margin-top:4px}
+
+
+/* The native currency-manager icon at the left of CP/SP/GP is replaced
+   by the wallet right-click action, without changing the coin fields. */
+dnd5e-inventory > section.currency > button[data-action="currency"] {
+  display: none !important;
+}
+
+.pcga-wallet-context-menu {
+  position: fixed;
+  z-index: 100000;
+  min-width: 180px;
+  padding: 4px;
+  color: var(--color-text-light-primary, #e9e2d7);
+  background: var(--dnd5e-color-card, #222126);
+  border: 1px solid var(--dnd5e-color-gold, #8d7652);
+  border-radius: 5px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .55);
+}
+
+.pcga-wallet-context-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 3px;
+  padding: 7px 9px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.pcga-wallet-context-menu button:hover,
+.pcga-wallet-context-menu button:focus-visible {
+  background: rgba(173, 138, 84, .24);
+  outline: none;
+}
+
+.pcga-wallet-transfer-dialog { min-width: 320px; }
+.pcga-wallet-transfer-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.pcga-wallet-transfer-heading > i.currency {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  background-size: contain;
+}
+.pcga-wallet-transfer-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pcga-wallet-transfer-heading > div span {
+  font-size: 12px;
+  opacity: .8;
+}
+.pcga-wallet-transfer-dialog select { width: 100%; }
+.pcga-wallet-transfer-quantity { display: flex; align-items: center; gap: 10px; }
+.pcga-wallet-transfer-quantity input[type="range"] { flex: 1; min-width: 120px; }
+.pcga-wallet-transfer-quantity input[type="number"] {
+  width: 80px;
+  flex: 0 0 80px;
+  text-align: center;
+}
