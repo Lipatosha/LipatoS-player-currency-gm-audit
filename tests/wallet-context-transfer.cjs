@@ -63,28 +63,36 @@ globalThis.test = {
   return sandbox.test;
 }
 
-function walletLabel(code) {
-  const inventory = {
-    matches: selector => selector === "dnd5e-inventory",
-    document: origin
+function walletLabel(code, {hasWallet = true, iconType = "img"} = {}) {
+  const inventory = {document: origin};
+  const section = {closest: selector => selector === "dnd5e-inventory" && hasWallet ? inventory : null};
+  const input = {name: "system.currency." + code};
+  const icon = {tagName: iconType.toUpperCase(), dataset: {actorUuid: origin.uuid}};
+  const label = {
+    closest: selector => selector === "section.currency" && hasWallet ? section : null,
+    querySelector(selector) {
+      if (selector === 'input[name^="system.currency."]') return input;
+      if (selector.includes("img.currency") && iconType === "img") return icon;
+      return null;
+    }
   };
-  const section = {
-    matches: selector => selector === "section.currency",
-    parentElement: inventory
-  };
-  return {
-    parentElement: section,
-    querySelector: selector => selector.includes("i.currency." + code) ? {} : null
-  };
+  return {label, icon, input};
 }
 
 (async () => {
   const gm = api(users[0]);
   const player = api(users[1]);
   for (const code of ["cp", "sp", "gp"]) {
-    assert.equal(gm.selectCoin(walletLabel(code)).code, code,
-      "right-click wallet recognition for " + code);
+    const coin = walletLabel(code, {iconType: "img"});
+    assert.equal(gm.selectCoin(coin.label).code, code,
+      "recognize the coin when the original <i> was replaced by a draggable <img>: " + code);
+    assert.equal(gm.selectCoin(walletLabel(code, {iconType: "i"}).label).code, code,
+      "also recognize the original D&D5e icon: " + code);
+    assert.equal(gm.selectCoin(walletLabel(code, {hasWallet: false}).label), null,
+      "do not interpret a price icon as money in the character wallet: " + code);
   }
+  assert.match(code, /event\.target\?\.closest\?\.\("label"\)/,
+    "contextmenu must recognize the input, coin image and label without rigid direct-child CSS");
   assert.equal(gm.validate({sp: 5}).sp, 5);
   assert.equal(gm.validate({gp: 1.5}), null, "fractional coin transfers must be rejected");
   assert.equal(gm.validate({pp: 10}), null, "nonexistent currency must be rejected");
