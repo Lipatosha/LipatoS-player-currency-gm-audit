@@ -565,6 +565,44 @@ function injectSendToGM(app) {
 const RECENT_ITEM_DESTINATIONS = [];
 const ITEM_PAIR_WINDOW_MS = 3000;
 const PENDING_ITEM_DELETIONS = new Map();
+
+// Deleting the final charge/portion or the final piece of ammunition is
+// consumption, not a manual inventory deletion. Mark only the specific
+// actor-owned item that D&D5e is actually consuming.
+const PCGA_CONSUMPTION_WINDOW_MS = 30000;
+const PCGA_CONSUMED_ITEM_KEYS = new Map();
+
+function pcgaConsumptionKey(actor, itemId) {
+  if (!actor?.uuid || !itemId) return null;
+  return `${actor.uuid}|${itemId}`;
+}
+
+function pcgaMarkConsumedItem(actor, itemId) {
+  const key = pcgaConsumptionKey(actor, itemId);
+  if (!key) return;
+  PCGA_CONSUMED_ITEM_KEYS.set(key, Date.now());
+}
+
+function pcgaForgetConsumedItem(actor, itemId) {
+  const key = pcgaConsumptionKey(actor, itemId);
+  if (key) PCGA_CONSUMED_ITEM_KEYS.delete(key);
+}
+
+function pcgaIsConsumptionDeletion(item, options) {
+  if (options?.lipatosItemConsumed || options?.itemMoveStackUse) return true;
+  const key = pcgaConsumptionKey(item?.parent, item?.id);
+  if (!key) return false;
+  const markedAt = PCGA_CONSUMED_ITEM_KEYS.get(key);
+  if (markedAt === undefined) return false;
+  PCGA_CONSUMED_ITEM_KEYS.delete(key);
+  return Date.now() - markedAt <= PCGA_CONSUMPTION_WINDOW_MS;
+}
+
+function pcgaConsumptionDeletedIds(updates) {
+  return (Array.isArray(updates?.delete) ? updates.delete : [])
+    .map(entry => typeof entry === "string" ? entry : entry?._id ?? entry?.id)
+    .filter(Boolean);
+}
 const ITEM_PILES_TRADE_HOOK = "item-piles-tradeComplete";
 
 function itemQuantity(item) {
@@ -906,6 +944,30 @@ Hooks.once("ready", () => {
   }
 
 
+  // Native D&D5e consumption can delete an Item without custom document
+  // options. Track only Item IDs listed in confirmed consumption updates.
+  Hooks.on("dnd5e.activityConsumption", (activity, usage, message, updates) => {
+    const actor = activity?.actor;
+    for (const id of pcgaConsumptionDeletedIds(updates)) {
+      pcgaMarkConsumedItem(actor, id);
+    }
+  });
+
+  // The consumption batch has completed. Clear stale markers if some items
+  // were not actually destroyed (canceled or rejected by another module).
+  Hooks.on("dnd5e.postActivityConsumption", (activity, usage, message, updates) => {
+    for (const id of pcgaConsumptionDeletedIds(updates)) {
+      pcgaForgetConsumedItem(activity?.actor, id);
+    }
+  });
+
+  // Ammunition depleted by a confirmed attack is removed by the attack
+  // activity itself, outside the normal activity-consumption batch.
+  Hooks.on("dnd5e.rollAttack", (rolls, data) => {
+    if (!rolls?.length || !data?.ammoUpdate?.destroy) return;
+    pcgaMarkConsumedItem(data.subject?.actor, data.ammoUpdate.id);
+  });
+
   // Track transfer destination when a new Item is created on another Actor.
   Hooks.on("createItem", (item, options, userId) => {
     rememberItemDestination(item, itemQuantity(item), userId);
@@ -990,7 +1052,7 @@ Hooks.once("ready", () => {
   Hooks.on("deleteItem", async (item, options, userId) => {
     // Technical deletions are not "Удаление предмета" for audit purposes.
     if (options?.itemMoveStackMerge) return;
-    if (options?.itemMoveStackUse) return;
+    if (pcgaIsConsumptionDeletion(item, options)) return;
     // A physical coin moved from a container into the GP/SP/CP wallet is
     // consumed as a bookkeeping step, not deleted by the player.
     if (options?.lipatosCurrencyTransfer) return;
