@@ -480,6 +480,174 @@ async function pcgaOpenPlayerTransferDialog(app) {
   const success = await pcgaConfirmCurrencyTransfer(origin, target, amounts);
   if (success) app.close();
 }
+
+function pcgaWalletCoinFromLabel(label) {
+  const section = label?.parentElement;
+  if (!section?.matches?.("section.currency") ||
+      !section.parentElement?.matches?.("dnd5e-inventory")) return null;
+  const code = ["cp", "sp", "gp"].find(key =>
+    label.querySelector?.(`i.currency.${key}, span.currency.${key}`)
+  );
+  if (!code) return null;
+  const inventory = section.parentElement;
+  const source = inventory.document;
+  const actor = source?.documentName === "Actor" ? source : source?.actor;
+  if (!actor?.system?.currency || !["character", "group"].includes(actor.type)) return null;
+  return {actor, code};
+}
+
+async function pcgaOpenWalletTransferDialog(actor, code) {
+  if (!actor?.isOwner) {
+    ui.notifications.warn("Нет прав на передачу монет.");
+    return;
+  }
+  const maximum = Math.floor(Number(actor.system?.currency?.[code]));
+  if (!Number.isSafeInteger(maximum) || maximum < 1) {
+    ui.notifications.warn("Нет монет для передачи.");
+    return;
+  }
+  const recipients = pcgaTransferRecipients(actor).filter(r => !(game.user.isGM && r.type === "gm"));
+  if (!recipients.length) {
+    ui.notifications.warn("Нет получателей онлайн или доступной группы.");
+    return;
+  }
+  const DialogV2 = foundry.applications?.api?.DialogV2;
+  if (!DialogV2?.wait) return;
+
+  const names = {cp: "Медь", sp: "Серебро", gp: "Золото"};
+  const uid = foundry.utils.randomID();
+  const selector = `.pcga-wallet-dialog-${uid}`;
+  const clamp = raw => {
+    const n = Math.floor(Number(raw));
+    return Number.isFinite(n) ? Math.max(1, Math.min(maximum, n)) : 1;
+  };
+  const sync = event => {
+    const root = event.target?.closest?.(selector);
+    if (!root) return;
+    if (!event.target.matches('input[name="quantity"], input[name="quantitySlider"]')) return;
+    const number = root.querySelector('input[name="quantity"]');
+    const slider = root.querySelector('input[name="quantitySlider"]');
+    if (!number || !slider || (event.type === "input" && number === event.target && number.value === "")) return;
+    const value = clamp(event.target.value);
+    number.value = String(value);
+    slider.value = String(value);
+  };
+  document.addEventListener("input", sync, true);
+  document.addEventListener("change", sync, true);
+
+  const options = recipients.map((recipient, index) =>
+    `<option value="${index}">${foundry.utils.escapeHTML(recipient.name)}</option>`
+  ).join("");
+
+  try {
+    const selected = await DialogV2.wait({
+      window: {title: "Передать предмет"},
+      modal: true,
+      content: `
+        <div class="standard-form pcga-wallet-transfer-dialog pcga-wallet-dialog-${uid}">
+          <div class="pcga-wallet-transfer-heading">
+            <i class="currency ${code}" aria-hidden="true"></i>
+            <div><strong>${names[code]}</strong><span>Доступно: ${maximum}</span></div>
+          </div>
+          <div class="form-group">
+            <label>Кому передать</label>
+            <div class="form-fields"><select name="recipient">${options}</select></div>
+          </div>
+          <div class="form-group">
+            <label>Количество</label>
+            <div class="form-fields pcga-wallet-transfer-quantity">
+              <input name="quantitySlider" type="range" min="1" max="${maximum}" step="1" value="${maximum}">
+              <input name="quantity" type="number" min="1" max="${maximum}" step="1" value="${maximum}">
+            </div>
+          </div>
+        </div>`,
+      buttons: [
+        {
+          action: "confirm", label: "Подтвердить", default: true,
+          callback: (_event, button) => {
+            const index = Number(button.form?.elements?.recipient?.value);
+            const amount = Number(button.form?.elements?.quantity?.value);
+            if (!Number.isSafeInteger(index) || !recipients[index] ||
+                !Number.isSafeInteger(amount) || amount < 1 || amount > maximum) {
+              ui.notifications.warn("Выберите получателя и корректное количество монет.");
+              return null;
+            }
+            return {index, amount};
+          }
+        },
+        {action: "cancel", label: "Отмена", callback: () => null}
+      ],
+      close: () => null
+    });
+    if (!selected) return;
+
+    const recipient = recipients[selected.index];
+    if (!recipient || !pcgaTransferRecipients(actor).some(r => r.id === recipient.id)) {
+      ui.notifications.warn("Получатель больше не в сети или группа недоступна.");
+      return;
+    }
+    await pcgaConfirmCurrencyTransfer(actor, recipient, {[code]: selected.amount});
+  } finally {
+    document.removeEventListener("input", sync, true);
+    document.removeEventListener("change", sync, true);
+  }
+}
+
+function pcgaInstallWalletContextMenu() {
+  let currentMenu = null;
+  let cleanup = null;
+  const close = () => {
+    if (cleanup) cleanup();
+    currentMenu?.remove();
+    currentMenu = null;
+    cleanup = null;
+  };
+
+  document.addEventListener("contextmenu", event => {
+    const label = event.target?.closest?.("dnd5e-inventory > section.currency > label");
+    const currency = pcgaWalletCoinFromLabel(label);
+    if (!currency || !currency.actor.isOwner) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    close();
+
+    const menu = document.createElement("div");
+    menu.className = "pcga-wallet-context-menu";
+    menu.setAttribute("role", "menu");
+    const transfer = document.createElement("button");
+    transfer.type = "button";
+    transfer.setAttribute("role", "menuitem");
+    transfer.innerHTML = '<i class="fa-solid fa-hand-holding" aria-hidden="true"></i> Передать предмет';
+    menu.appendChild(transfer);
+    document.body.appendChild(menu);
+    currentMenu = menu;
+
+    const x = Math.max(0, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8));
+    const y = Math.max(0, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8));
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+
+    transfer.addEventListener("click", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+      void pcgaOpenWalletTransferDialog(currency.actor, currency.code);
+    });
+
+    const onOutside = e => { if (!menu.contains(e.target)) close(); };
+    const onEscape = e => { if (e.key === "Escape") close(); };
+    document.addEventListener("pointerdown", onOutside, true);
+    document.addEventListener("keydown", onEscape, true);
+    cleanup = () => {
+      document.removeEventListener("pointerdown", onOutside, true);
+      document.removeEventListener("keydown", onEscape, true);
+    };
+    transfer.focus();
+  }, true);
+}
+
 function injectSendToGM(app) {
   if (game.user.isGM) return;
   const root = app.element;
@@ -860,6 +1028,7 @@ function pcgaOrderActorWallets() {
 
 Hooks.once("ready", () => {
   pcgaOrderActorWallets();
+  pcgaInstallWalletContextMenu();
   if (game.system.id !== "dnd5e") return;
 
   const pcgaSocketHandler = async payload => {
