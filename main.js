@@ -217,7 +217,7 @@ function pcgaGroupHasMember(group, actor) {
 function pcgaTransferRecipients(originActor) {
   const sourceActor = originActor?.documentName === "Actor" ? originActor : originActor?.parent;
   const result = [];
-  if (primaryActiveGM()) result.push({id: "__GM__", name: "ГМ", type: "gm"});
+  if (primaryActiveGM() || game.user?.isGM) result.push({id: "__GM__", name: "ГМ", type: "gm"});
 
   if (sourceActor?.type === "character") {
     for (const group of game.actors.filter(actor => actor.type === "group")) {
@@ -530,7 +530,9 @@ async function pcgaOpenWalletTransferDialog(actor, code) {
     ui.notifications.warn("Нет монет для передачи.");
     return;
   }
-  const recipients = pcgaTransferRecipients(actor).filter(r => !(game.user.isGM && r.type === "gm"));
+  // The "ГМ" destination is valid even when the sender is currently the GM.
+  // It is an immediate transfer to the GM treasury, not a trade request.
+  const recipients = pcgaTransferRecipients(actor);
   if (!recipients.length) {
     ui.notifications.warn("Нет получателей онлайн или доступной группы.");
     return;
@@ -643,10 +645,14 @@ function pcgaInstallWalletContextMenu() {
     const menu = document.createElement("div");
     menu.className = "pcga-wallet-context-menu";
     menu.setAttribute("role", "menu");
-    const transfer = document.createElement("button");
-    transfer.type = "button";
+    // Do not use a BUTTON here: D&D5e global button styles turn its
+    // background white with nearly invisible text on dark actor sheets.
+    // A focusable menu item uses our own Foundry-like context styling.
+    const transfer = document.createElement("div");
+    transfer.className = "pcga-wallet-context-item";
     transfer.setAttribute("role", "menuitem");
-    transfer.innerHTML = '<i class="fa-solid fa-hand-holding" aria-hidden="true"></i> Передать предмет';
+    transfer.setAttribute("tabindex", "0");
+    transfer.innerHTML = '<i class="fa-solid fa-hand-holding" aria-hidden="true"></i><span>Передать предмет</span>';
     menu.appendChild(transfer);
     document.body.appendChild(menu);
     currentMenu = menu;
@@ -656,11 +662,16 @@ function pcgaInstallWalletContextMenu() {
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;
 
-    transfer.addEventListener("click", e => {
+    const executeTransfer = e => {
       e.preventDefault();
       e.stopPropagation();
       close();
       void pcgaOpenWalletTransferDialog(currency.actor, currency.code);
+    };
+    transfer.addEventListener("click", executeTransfer);
+    transfer.addEventListener("keydown", e => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      executeTransfer(e);
     });
 
     const onOutside = e => { if (!menu.contains(e.target)) close(); };
