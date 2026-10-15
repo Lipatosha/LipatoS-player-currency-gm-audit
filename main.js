@@ -970,6 +970,7 @@ Hooks.once("ready", () => {
 
   // Track transfer destination when a new Item is created on another Actor.
   Hooks.on("createItem", (item, options, userId) => {
+    if (options?.lipatosItemTransfer) return; // already reported through unified transfer event
     rememberItemDestination(item, itemQuantity(item), userId);
   });
 
@@ -977,6 +978,7 @@ Hooks.once("ready", () => {
   // +delta = destination received part of a stack
   // -delta = source gave part of a stack
   Hooks.on("updateItem", async (item, changes, options, userId) => {
+    if (options?.lipatosItemTransfer) return;
     if (game.user.isGM) return;
     if (userId && userId !== game.user.id) return;
     if (item?.parent?.documentName !== "Actor") return;
@@ -1042,6 +1044,7 @@ Hooks.once("ready", () => {
 
   // Capture quantity before update so updateItem can calculate the increase.
   Hooks.on("preUpdateItem", (item, changes, options, userId) => {
+    if (options?.lipatosItemTransfer) return;
     if (game.user.isGM) return;
     if (userId && userId !== game.user.id) return;
     const changedQty = foundry.utils.getProperty(changes, "system.quantity");
@@ -1050,6 +1053,7 @@ Hooks.once("ready", () => {
   });
 
   Hooks.on("deleteItem", async (item, options, userId) => {
+    if (options?.lipatosItemTransfer) return; // actual transfer; not deletion
     // Technical deletions are not "Удаление предмета" for audit purposes.
     if (options?.itemMoveStackMerge) return;
     if (pcgaIsConsumptionDeletion(item, options)) return;
