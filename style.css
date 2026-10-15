@@ -78,38 +78,55 @@ dnd5e-inventory > section.currency > button[data-action="currency"] {
   display: none !important;
 }
 
+/* Wallet right-click menu. Rendered outside actor sheets, so use solid
+   colors rather than inheriting native button/form theme styles. */
 .pcga-wallet-context-menu {
   position: fixed;
   z-index: 100000;
-  min-width: 180px;
+  box-sizing: border-box;
+  min-width: 188px;
   padding: 4px;
-  color: var(--color-text-light-primary, #e9e2d7);
-  background: var(--dnd5e-color-card, #222126);
-  border: 1px solid var(--dnd5e-color-gold, #8d7652);
+  background: #201d20;
+  color: #efe4d0;
+  border: 1px solid #816b4a;
   border-radius: 5px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .55);
+  font-family: var(--font-primary, "Signika", sans-serif);
 }
 
-.pcga-wallet-context-menu button {
-  width: 100%;
+.pcga-wallet-context-menu .pcga-wallet-context-item {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 8px;
-  border: 0;
+  gap: 9px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: none;
   border-radius: 3px;
-  padding: 7px 9px;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  white-space: nowrap;
+  background: #292429;
+  color: #efe4d0;
   font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
 }
 
-.pcga-wallet-context-menu button:hover,
-.pcga-wallet-context-menu button:focus-visible {
-  background: rgba(173, 138, 84, .24);
-  outline: none;
+.pcga-wallet-context-menu .pcga-wallet-context-item i {
+  color: #c3a373;
+  width: 15px;
+  flex: 0 0 15px;
+  text-align: center;
+}
+
+.pcga-wallet-context-menu .pcga-wallet-context-item:hover,
+.pcga-wallet-context-menu .pcga-wallet-context-item:focus-visible {
+  background: #403331;
+  color: #fff5df;
+  outline: 1px solid #a18456;
+  outline-offset: -1px;
 }
 
 .pcga-wallet-transfer-dialog { min-width: 320px; }
