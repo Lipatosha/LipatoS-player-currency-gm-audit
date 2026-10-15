@@ -33,6 +33,7 @@ jobs:
           node tests/consumption-audit.cjs
           node tests/direct-transfer-audit.cjs
           node tests/wallet-context-transfer.cjs
+          node tests/wallet-gm-recipient.cjs
       - name: Build installation ZIP
         run: |
           zip -q lipatos-player-currency-gm-audit.zip module.json main.js style.css README.md CHANGELOG.md
