@@ -203,34 +203,47 @@ async function sendToGM(app) {
 }
 
 
+function pcgaGroupHasMember(group, actor) {
+  if (group?.type !== "group" || !actor) return false;
+  const members = group.system?.members;
+  if (members?.ids?.has?.(actor.id)) return true;
+  return Array.from(members ?? []).some(member => {
+    const value = member?.actor ?? member;
+    return value === actor.id || value === actor.uuid
+      || value?.id === actor.id || value?.uuid === actor.uuid;
+  });
+}
+
 function pcgaTransferRecipients(originActor) {
-  const result = [{id: "__GM__", name: "ГМ", type: "gm"}];
+  const sourceActor = originActor?.documentName === "Actor" ? originActor : originActor?.parent;
+  const result = [];
+  if (primaryActiveGM()) result.push({id: "__GM__", name: "ГМ", type: "gm"});
 
-  // Группа теперь находится внутри "Выбор игрока".
-  for (const actor of game.actors) {
-    if (actor.id === originActor?.id) continue;
-    if (actor.type !== "group") continue;
-
-    result.push({
-      id: actor.id,
-      name: actor.name,
-      type: "group"
-    });
+  if (sourceActor?.type === "character") {
+    for (const group of game.actors.filter(actor => actor.type === "group")) {
+      if (pcgaGroupHasMember(group, sourceActor)) {
+        result.push({id: group.id, name: group.name, type: "group"});
+      }
+    }
   }
 
-  // Затем остальные персонажи.
-  for (const actor of game.actors) {
-    if (actor.id === originActor?.id) continue;
-    if (actor.type !== "character") continue;
-
-    result.push({
-      id: actor.id,
-      name: actor.name,
-      type: "character"
-    });
+  const seen = new Set([sourceActor?.id]);
+  for (const user of game.users) {
+    if (!user.active || user.isGM) continue;
+    const character = user.character;
+    if (character?.type !== "character" || seen.has(character.id)) continue;
+    if (!game.actors.get(character.id)) continue;
+    seen.add(character.id);
+    result.push({id: character.id, name: character.name, type: "character"});
   }
 
-  return result;
+  return result.sort((a, b) => {
+    if (a.type === "gm") return -1;
+    if (b.type === "gm") return 1;
+    if (a.type === "group" && b.type !== "group") return -1;
+    if (b.type === "group" && a.type !== "group") return 1;
+    return a.name.localeCompare(b.name, game.i18n.lang);
+  });
 }
 
 async function pcgaGMRemoteCurrency(payload) {
@@ -251,7 +264,27 @@ async function pcgaGMRemoteCurrency(payload) {
     return;
   }
 
+
+  const requester = game.users.get(payload?.requesterId);
+  const owner = origin.documentName === "Actor" ? origin : origin.parent;
+  const allowed = pcgaTransferRecipients(origin);
+  if (!requester?.active || !owner?.testUserPermission?.(requester, "OWNER") ||
+      !allowed.some(recipient => recipient.id === payload?.targetActorId)) {
+    game.socket.emit(SOCKET, {
+      type: "remote-currency-result", requestId: payload.requestId, ok: false,
+      error: "Получатель не в сети, группа недоступна или нет прав на передачу."
+    });
+    return;
+  }
+
   const amounts = normalizeAmounts(payload?.amounts ?? {});
+  if (!Object.keys(amounts).length) {
+    game.socket.emit(SOCKET, {
+      type: "remote-currency-result", requestId: payload.requestId, ok: false,
+      error: "Не выбрано количество монет."
+    });
+    return;
+  }
   const originUpdate = {};
   const targetUpdate = {};
 
@@ -380,6 +413,10 @@ async function pcgaOpenPlayerTransferDialog(app) {
 
   if (selectedIndex == null || !recipients[selectedIndex]) return;
   const target = recipients[selectedIndex];
+  if (!pcgaTransferRecipients(origin).some(recipient => recipient.id === target.id)) {
+    ui.notifications.warn("Получатель больше не в сети или группа недоступна.");
+    return;
+  }
   const requestId = foundry.utils.randomID();
 
   const response = await new Promise(resolve => {
@@ -394,6 +431,7 @@ async function pcgaOpenPlayerTransferDialog(app) {
       type: "remote-currency-request",
       requestId,
       originActorUuid: origin.uuid,
+      requesterId: game.user.id,
       targetActorId: target.id,
       amounts
     });
@@ -783,6 +821,41 @@ Hooks.once("ready", () => {
 
   game.socket.on(SOCKET, pcgaSocketHandler);
   if (LEGACY_SOCKET !== SOCKET) game.socket.on(LEGACY_SOCKET, pcgaSocketHandler);
+
+  // The item menu delegates all successful transfer notifications to this
+  // module; never emit its own parallel/duplicate private chat messages.
+  Hooks.on("lipatosItemTransferCompleted", async result => {
+    if (game.user.isGM || !result?.ok) return;
+
+    const toGM = result.targetType === "gm";
+    const sourceActor = result.sourceActorUuid
+      ? await fromUuid(result.sourceActorUuid).catch(() => null) : null;
+    const destinations = toGM ? [] : [{name: result.targetName ?? "Получатель"}];
+
+    try {
+      if (["cp", "sp", "gp"].includes(result.coinCode)) {
+        const amounts = {[result.coinCode]: Math.max(1, Number(result.qty) || 1)};
+        sendAuditToGM(sourceActor ?? {name: result.sourceActorName}, destinations, amounts, {toGM});
+        await playerConfirmation(destinations, amounts, {toGM});
+      } else {
+        const payload = {
+          action: "transfer",
+          sourceActorUuid: result.sourceActorUuid,
+          sourceActorName: result.sourceActorName,
+          sourceActorType: result.sourceActorType,
+          targetActorName: result.targetName,
+          targetActorType: result.targetType,
+          itemName: result.itemName,
+          itemImg: result.itemImg,
+          quantity: result.qty
+        };
+        sendItemAuditToGM(payload);
+        await playerItemConfirmation(payload);
+      }
+    } catch (error) {
+      console.error(`${MODULE_ID} | Context transfer notification failed`, error);
+    }
+  });
 
   const CurrencyManager = game.dnd5e?.applications?.CurrencyManager;
   if (!CurrencyManager) {
