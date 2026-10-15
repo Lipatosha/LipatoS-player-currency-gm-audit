@@ -1,8 +1,8 @@
 {
   "id": "lipatos-player-currency-gm-audit",
   "title": "LipatoS - Аудит валюты и предметов",
-  "description": "Контролирует передачи валюты и предметов игроками: добавляет передачу ГМ и выбор получателя, показывает игроку подтверждения и создаёт приватный журнал действий для ГМ, включая перенос и удаление предметов.",
-  "version": "28.0.1",
+  "description": "Контролирует передачи валюты и предметов игроками с приватным журналом ГМ; не считает технический перенос физических монет в кошелёк удалением предмета.",
+  "version": "28.0.2",
   "compatibility": {
     "minimum": "14",
     "verified": "14"
@@ -32,5 +32,5 @@
   },
   "socket": true,
   "manifest": "https://raw.githubusercontent.com/Lipatosha/LipatoS-player-currency-gm-audit/main/module.json",
-  "download": "https://raw.githubusercontent.com/Lipatosha/LipatoS-player-currency-gm-audit/main/lipatos-player-currency-gm-audit-v28.0.1.zip"
+  "download": "https://github.com/Lipatosha/LipatoS-player-currency-gm-audit/releases/latest/download/lipatos-player-currency-gm-audit.zip"
 }
