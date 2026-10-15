@@ -70,6 +70,7 @@ const sandbox = {
   game: {user: gm, users, actors, i18n: {lang: "ru"}},
   foundry, document: fakeDocument, window: {innerWidth: 1100, innerHeight: 750},
   Hooks: {once() {}},
+  fromUuid: async uuid => uuid === character.uuid ? character : null,
   ui: {notifications: {warn(text) {messages.push(text);}, info(text) {messages.push(text);}}},
   console
 };
