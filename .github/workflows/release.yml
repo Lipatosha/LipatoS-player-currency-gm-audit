@@ -29,6 +29,7 @@ jobs:
           node --check main.js
           node -e 'const m=require("./module.json");if(m.id!=="lipatos-player-currency-gm-audit"||!m.version)process.exit(1);'
           node tests/coin-audit.cjs
+          node tests/online-audit.cjs
       - name: Build installation ZIP
         run: |
           zip -q lipatos-player-currency-gm-audit.zip module.json main.js style.css README.md CHANGELOG.md
