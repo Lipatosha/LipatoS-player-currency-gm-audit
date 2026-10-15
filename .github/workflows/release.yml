@@ -32,6 +32,7 @@ jobs:
           node tests/online-audit.cjs
           node tests/consumption-audit.cjs
           node tests/direct-transfer-audit.cjs
+          node tests/wallet-context-transfer.cjs
       - name: Build installation ZIP
         run: |
           zip -q lipatos-player-currency-gm-audit.zip module.json main.js style.css README.md CHANGELOG.md
@@ -49,5 +50,5 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "LipatoS — Аудит валюты и предметов $TAG" \
-              --notes "Израсходованные до конца предметы, еда и боеприпасы не учитываются как ручное удаление. Ручное удаление по-прежнему записывается."
+              --notes "ПКМ на медных, серебряных и золотых монетах передаёт валюту игрокам и ГМу. Убрана левая иконка управления монетами; сохранён приватный аудит."
           fi
