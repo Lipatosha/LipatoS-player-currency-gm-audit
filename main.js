@@ -482,16 +482,40 @@ async function pcgaOpenPlayerTransferDialog(app) {
 }
 
 function pcgaWalletCoinFromLabel(label) {
-  const section = label?.parentElement;
-  if (!section?.matches?.("section.currency") ||
-      !section.parentElement?.matches?.("dnd5e-inventory")) return null;
-  const code = ["cp", "sp", "gp"].find(key =>
-    label.querySelector?.(`i.currency.${key}, span.currency.${key}`)
-  );
+  // LipatoS Three Currencies replaces the native i.currency with a draggable
+  // img.currency. Read the denomination from the real D&D5e wallet input,
+  // never from an icon tag or its styling.
+  if (!label?.querySelector) return null;
+  const input = label.querySelector('input[name^="system.currency."]');
+  const name = String(input?.name ?? input?.getAttribute?.("name") ?? "");
+  const code = /^system\.currency\.(cp|sp|gp)$/.exec(name)?.[1];
   if (!code) return null;
-  const inventory = section.parentElement;
-  const source = inventory.document;
-  const actor = source?.documentName === "Actor" ? source : source?.actor;
+
+  // Currency prices in item rows are not wallet denominations. Restrict
+  // this menu to the actor wallet of the actual D&D5e inventory component.
+  const section = label.closest?.("section.currency");
+  const inventory = section?.closest?.("dnd5e-inventory");
+  if (!section || !inventory) return null;
+
+  const source = inventory.document ?? inventory.actor ?? inventory.app?.actor;
+  let actor = source?.documentName === "Actor" ? source : source?.actor;
+
+  // The Three Currencies module stores the precise actor UUID on its
+  // replacement IMG. Fallback helps on linked/unlinked token sheets.
+  if (!actor?.system?.currency) {
+    const icon = label.querySelector('img.lipatos-currency-drag, img.currency');
+    const uuid = icon?.dataset?.actorUuid;
+    if (uuid) {
+      try {
+        const doc = globalThis.fromUuidSync?.(uuid)
+          ?? foundry.utils.fromUuidSync?.(uuid);
+        actor = doc?.documentName === "Actor" ? doc : doc?.actor;
+      } catch (error) {
+        console.warn(`${MODULE_ID} | Could not resolve coin wallet actor`, error);
+      }
+    }
+  }
+
   if (!actor?.system?.currency || !["character", "group"].includes(actor.type)) return null;
   return {actor, code};
 }
@@ -604,7 +628,10 @@ function pcgaInstallWalletContextMenu() {
   };
 
   document.addEventListener("contextmenu", event => {
-    const label = event.target?.closest?.("dnd5e-inventory > section.currency > label");
+    // Capture RMB over either the replacement coin IMG or its numeric input.
+    // Avoid a rigid direct-child selector; D&D5e sheets may wrap the wallet.
+    const label = event.target?.closest?.("label");
+
     const currency = pcgaWalletCoinFromLabel(label);
     if (!currency || !currency.actor.isOwner) return;
 
