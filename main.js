@@ -918,6 +918,9 @@ Hooks.once("ready", () => {
     // Technical deletions are not "Удаление предмета" for audit purposes.
     if (options?.itemMoveStackMerge) return;
     if (options?.itemMoveStackUse) return;
+    // A physical coin moved from a container into the GP/SP/CP wallet is
+    // consumed as a bookkeeping step, not deleted by the player.
+    if (options?.lipatosCurrencyTransfer) return;
 
     if (game.user.isGM) return;
     if (userId && userId !== game.user.id) return;
