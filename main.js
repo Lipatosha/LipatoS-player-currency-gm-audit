@@ -246,116 +246,176 @@ function pcgaTransferRecipients(originActor) {
   });
 }
 
-async function pcgaGMRemoteCurrency(payload) {
-  if (!game.user.isGM) return;
 
-  const primary = primaryActiveGM();
-  if (primary && primary.id !== game.user.id) return;
-
-  const origin = await fromUuid(payload?.originActorUuid).catch(() => null);
-
-  if (!origin?.system?.currency) {
-    game.socket.emit(SOCKET, {
-      type: "remote-currency-result",
-      requestId: payload.requestId,
-      ok: false,
-      error: "Отправитель больше недоступен."
-    });
-    return;
+function pcgaValidateWalletAmounts(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const entries = Object.entries(raw);
+  if (!entries.length) return null;
+  const result = {};
+  for (const [coin, amount] of entries) {
+    if (!["cp", "sp", "gp"].includes(coin) || !Number.isSafeInteger(amount) || amount < 1) return null;
+    result[coin] = amount;
   }
+  return result;
+}
 
+// One authoritative currency transaction. A GM (or the owner of both wallets)
+// executes it immediately; a transfer across ownership boundaries is
+// automatically applied by an online GM, without a confirmation request.
+async function pcgaGMRemoteCurrency(payload, {local = false} = {}) {
+  if (!local && !game.user.isGM) return;
+  const primary = primaryActiveGM();
+  if (!local && (!primary || primary.id !== game.user.id)) return;
+
+  const reply = (ok, extra = {}) => {
+    const response = {
+      type: "remote-currency-result",
+      requestId: payload?.requestId,
+      requesterId: payload?.requesterId,
+      ok, ...extra
+    };
+    if (!local) game.socket.emit(SOCKET, response);
+    return response;
+  };
 
   const requester = game.users.get(payload?.requesterId);
-  const owner = origin.documentName === "Actor" ? origin : origin.parent;
-  const allowed = pcgaTransferRecipients(origin);
-  if (!requester?.active || !owner?.testUserPermission?.(requester, "OWNER") ||
-      !allowed.some(recipient => recipient.id === payload?.targetActorId)) {
-    game.socket.emit(SOCKET, {
-      type: "remote-currency-result", requestId: payload.requestId, ok: false,
-      error: "Получатель не в сети, группа недоступна или нет прав на передачу."
-    });
-    return;
+  const origin = payload?.originActorUuid
+    ? await fromUuid(payload.originActorUuid).catch(() => null) : null;
+  const owner = origin?.documentName === "Actor" ? origin : origin?.parent;
+  if (!requester?.active || !origin?.system?.currency || !owner ||
+      !owner.testUserPermission?.(requester, "OWNER") ||
+      (local && !game.user.isGM && game.user.id !== requester.id)) {
+    return reply(false, {error: "Кошелёк отправителя недоступен или нет прав."});
   }
 
-  const amounts = normalizeAmounts(payload?.amounts ?? {});
-  if (!Object.keys(amounts).length) {
-    game.socket.emit(SOCKET, {
-      type: "remote-currency-result", requestId: payload.requestId, ok: false,
-      error: "Не выбрано количество монет."
-    });
-    return;
+  if (!pcgaTransferRecipients(owner).some(r => r.id === payload?.targetActorId)) {
+    return reply(false, {error: "Получатель не в сети или группа недоступна."});
   }
+
+  const amounts = pcgaValidateWalletAmounts(payload?.amounts);
+  if (!amounts) return reply(false, {error: "Укажите целое положительное количество монет."});
+
+  const targetId = payload.targetActorId;
+  const target = targetId === "__GM__" ? null : game.actors.get(targetId);
+  if (targetId !== "__GM__" && !target?.system?.currency) {
+    return reply(false, {error: "Кошелёк получателя недоступен."});
+  }
+  if (local && !game.user.isGM && (targetId === "__GM__" || !target.isOwner)) {
+    return reply(false, {error: "Для передачи этому получателю требуется подключённый ГМ."});
+  }
+
   const originUpdate = {};
+  const originRestore = {};
   const targetUpdate = {};
-
-  // Special destination: GM. Money is removed from the sender,
-  // and the normal GM audit records the operation.
-  if (payload?.targetActorId === "__GM__") {
-    for (const [key, amount] of Object.entries(amounts)) {
-      const from = Number(origin.system.currency[key] ?? 0) || 0;
-      if (amount > from) {
-        game.socket.emit(SOCKET, {
-          type: "remote-currency-result",
-          requestId: payload.requestId,
-          ok: false,
-          error: `Недостаточно валюты: ${key.toUpperCase()}`
-        });
-        return;
+  for (const [key, qty] of Object.entries(amounts)) {
+    const previous = Number(origin.system.currency[key]);
+    if (!Number.isSafeInteger(previous) || previous < qty) {
+      return reply(false, {error: `Недостаточно валюты: ${key.toUpperCase()}.`});
+    }
+    originUpdate[`system.currency.${key}`] = previous - qty;
+    originRestore[`system.currency.${key}`] = previous;
+    if (target) {
+      const current = Number(target.system.currency[key]);
+      if (!Number.isSafeInteger(current) || current < 0 ||
+          !Number.isSafeInteger(current + qty)) {
+        return reply(false, {error: "Некорректный баланс получателя."});
       }
-      originUpdate[`system.currency.${key}`] = from - amount;
+      targetUpdate[`system.currency.${key}`] = current + qty;
     }
-
-    await origin.update(originUpdate);
-
-    game.socket.emit(SOCKET, {
-      type: "remote-currency-result",
-      requestId: payload.requestId,
-      ok: true,
-      targetActorId: "__GM__",
-      targetName: "ГМ"
-    });
-    return;
   }
 
-  const target = game.actors.get(payload?.targetActorId);
-
-  if (!target?.system?.currency) {
-    game.socket.emit(SOCKET, {
-      type: "remote-currency-result",
-      requestId: payload.requestId,
-      ok: false,
-      error: "Получатель больше недоступен."
-    });
-    return;
-  }
-
-  for (const [key, amount] of Object.entries(amounts)) {
-    const from = Number(origin.system.currency[key] ?? 0) || 0;
-    if (amount > from) {
-      game.socket.emit(SOCKET, {
-        type: "remote-currency-result",
-        requestId: payload.requestId,
-        ok: false,
-        error: `Недостаточно валюты: ${key.toUpperCase()}`
-      });
-      return;
+  try {
+    await origin.update(originUpdate, {[MODULE_ID]: {walletTransfer: true}});
+    try {
+      if (target) await target.update(targetUpdate, {[MODULE_ID]: {walletTransfer: true}});
+    } catch (err) {
+      // Never silently keep the sender's deduction after crediting fails.
+      try {
+        await origin.update(originRestore, {[MODULE_ID]: {walletTransfer: true}});
+      } catch (rollbackError) {
+        console.error(`${MODULE_ID} | Wallet transfer rollback failed`, rollbackError);
+      }
+      throw err;
     }
-
-    const to = Number(target.system.currency[key] ?? 0) || 0;
-    originUpdate[`system.currency.${key}`] = from - amount;
-    targetUpdate[`system.currency.${key}`] = to + amount;
+    return reply(true, {
+      targetActorId: target?.id ?? "__GM__",
+      targetName: target?.name ?? "ГМ"
+    });
+  } catch (error) {
+    console.error(`${MODULE_ID} | Wallet transfer failed`, error);
+    return reply(false, {error: "Передача монет не выполнена. Баланс необходимо проверить."});
   }
+}
 
-  await origin.update(originUpdate);
-  await target.update(targetUpdate);
-
-  game.socket.emit(SOCKET, {
-    type: "remote-currency-result",
-    requestId: payload.requestId,
-    ok: true,
+async function pcgaRequestCurrencyTransfer(origin, target, amounts) {
+  const requestId = foundry.utils.randomID();
+  const payload = {
+    type: "remote-currency-request",
+    requestId,
+    requesterId: game.user.id,
+    originActorUuid: origin.uuid,
     targetActorId: target.id,
-    targetName: target.name
+    amounts
+  };
+
+  // GM never sends a socket request to itself; owned-to-owned currency
+  // transfers are also direct, even when no GM is connected.
+  if (game.user.isGM) return pcgaGMRemoteCurrency(payload, {local: true});
+
+  const recipient = target.id === "__GM__" ? null : game.actors.get(target.id);
+  if (origin.isOwner && recipient?.isOwner) {
+    return pcgaGMRemoteCurrency(payload, {local: true});
+  }
+
+  if (!primaryActiveGM()) {
+    return {ok: false, error: "Для передачи этому получателю нужен подключённый ГМ."};
+  }
+
+  return new Promise(resolve => {
+    const socket = SOCKET;
+    let finished = false;
+    let timeout;
+    const finish = result => {
+      if (finished) return;
+      finished = true;
+      game.socket.off(socket, onResult);
+      clearTimeout(timeout);
+      resolve(result);
+    };
+    const onResult = result => {
+      if (result?.type !== "remote-currency-result" ||
+          result.requestId !== requestId || result.requesterId !== game.user.id) return;
+      finish(result);
+    };
+    game.socket.on(socket, onResult);
+    timeout = setTimeout(() => {
+      finish({ok: false, error: "Не удалось выполнить передачу. Проверьте подключение и попробуйте ещё раз."});
+    }, 15000);
+    try {
+      game.socket.emit(socket, payload);
+    } catch (err) {
+      console.error(`${MODULE_ID} | Wallet transfer socket failed`, err);
+      finish({ok: false, error: "Не удалось выполнить передачу из-за ошибки соединения."});
+    }
   });
+}
+
+async function pcgaConfirmCurrencyTransfer(origin, target, amounts) {
+  const response = await pcgaRequestCurrencyTransfer(origin, target, amounts);
+  if (!response?.ok) {
+    ui.notifications.warn(response?.error ?? "Не удалось передать деньги.");
+    return false;
+  }
+
+  if (!game.user.isGM) {
+    const toGM = target.id === "__GM__";
+    const destination = toGM ? [] : [game.actors.get(target.id)].filter(Boolean);
+    sendAuditToGM(origin, destination, amounts, {toGM});
+    await playerConfirmation(destination, amounts, {toGM});
+  }
+
+  ui.notifications.info("Монеты переданы.");
+  return true;
 }
 
 async function pcgaOpenPlayerTransferDialog(app) {
@@ -417,47 +477,8 @@ async function pcgaOpenPlayerTransferDialog(app) {
     ui.notifications.warn("Получатель больше не в сети или группа недоступна.");
     return;
   }
-  const requestId = foundry.utils.randomID();
-
-  const response = await new Promise(resolve => {
-    const handler = payload => {
-      if (payload?.type !== "remote-currency-result" || payload?.requestId !== requestId) return;
-      game.socket.off(SOCKET, handler);
-      resolve(payload);
-    };
-
-    game.socket.on(SOCKET, handler);
-    game.socket.emit(SOCKET, {
-      type: "remote-currency-request",
-      requestId,
-      originActorUuid: origin.uuid,
-      requesterId: game.user.id,
-      targetActorId: target.id,
-      amounts
-    });
-
-    setTimeout(() => {
-      game.socket.off(SOCKET, handler);
-      resolve({ok: false, error: "ГМ не ответил на запрос передачи."});
-    }, 8000);
-  });
-
-  if (!response?.ok) {
-    ui.notifications.warn(response?.error ?? "Не удалось передать деньги.");
-    return;
-  }
-
-  if (target.id === "__GM__") {
-    sendAuditToGM(origin, [], amounts, {toGM: true});
-    await playerConfirmation([], amounts, {toGM: true});
-  } else {
-    const targetActor = game.actors.get(target.id);
-    sendAuditToGM(origin, targetActor ? [targetActor] : [], amounts);
-    await playerConfirmation(targetActor ? [targetActor] : [], amounts);
-  }
-
-  ui.notifications.info("Деньги переданы.");
-  app.close();
+  const success = await pcgaConfirmCurrencyTransfer(origin, target, amounts);
+  if (success) app.close();
 }
 function injectSendToGM(app) {
   if (game.user.isGM) return;
