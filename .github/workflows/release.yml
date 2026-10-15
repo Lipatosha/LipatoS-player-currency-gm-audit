@@ -31,6 +31,7 @@ jobs:
           node tests/coin-audit.cjs
           node tests/online-audit.cjs
           node tests/consumption-audit.cjs
+          node tests/direct-transfer-audit.cjs
       - name: Build installation ZIP
         run: |
           zip -q lipatos-player-currency-gm-audit.zip module.json main.js style.css README.md CHANGELOG.md
